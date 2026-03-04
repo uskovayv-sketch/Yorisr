@@ -13,7 +13,38 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 import nest_asyncio
+# Добавь ЭТО в самый верх bot.py (после импортов)
+import asyncio
+import logging
+from aiohttp import web
 
+# Простой HTTP сервер для Health Check Render
+async def handle_health(request):
+    return web.Response(text="OK")
+
+async def run_health_server():
+    app = web.Application()
+    app.router.add_get('/', handle_health)
+    app.router.add_get('/health', handle_health)
+    
+    # Render передает порт в переменной PORT (обычно 10000)
+    port = int(os.environ.get('PORT', 10000))
+    
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    logging.info(f"Health check server started on port {port}")
+    
+
+# В функции main() добавь запуск health сервера:
+async def main():
+    # Запускаем health check сервер (чтобы Render не ругался)
+    asyncio.create_task(run_health_server())
+    
+    logging.info("Бот запускается...")
+    await bot.delete_webhook(drop_pending_updates=True)
+    await dp.start_polling(bot)
 # Разрешаем asyncio в Colab (если будешь тестировать)
 nest_asyncio.apply()
 
