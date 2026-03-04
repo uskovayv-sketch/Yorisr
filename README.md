@@ -15,3 +15,8 @@
 - Python
 - Aiogram 3.x
 - YandexGPT API
+
+## Переменные окружения (обязательно!)
+- `TELEGRAM_TOKEN` - токен бота от @BotFather
+- `YANDEX_API_KEY` - API-ключ YandexGPT
+- `YANDEX_FOLDER_ID` - ID каталога в Yandex Cloud
