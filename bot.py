@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Юридический бот-помощник на базе YandexGPT
-Работает через переменные окружения (безопасно!)
+С защитой от лишнего расхода токенов и поддержкой Render
 """
 
 import os
@@ -12,35 +12,18 @@ import json
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
-import nest_asyncio
 from aiohttp import web
+import nest_asyncio
 
-# Простой HTTP сервер для Health Check
-async def health_check(request):
-    return web.Response(text="I'm alive!")
-
-async def start_health_server():
-    app = web.Application()
-    app.router.add_get('/', health_check)
-    app.router.add_get('/health', health_check)
-    
-    # Render дает порт через переменную окружения
-    port = int(os.environ.get('PORT', 8080))
-    
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', port)
-    await site.start()
-    print(f"✅ Health server running on port {port}")
-# Разрешаем asyncio в Colab (если будешь тестировать)
+# Разрешаем asyncio
 nest_asyncio.apply()
 
-# ================== БЕРЕМ ТОКЕНЫ ИЗ ОКРУЖЕНИЯ ==================
+# ================== ТОКЕНЫ ИЗ ОКРУЖЕНИЯ ==================
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
 YANDEX_API_KEY = os.environ.get('YANDEX_API_KEY')
 YANDEX_FOLDER_ID = os.environ.get('YANDEX_FOLDER_ID')
 
-# Проверяем, что токены загрузились
+# Проверка токенов
 if not TELEGRAM_TOKEN:
     raise ValueError("Нет TELEGRAM_TOKEN! Добавь в переменные окружения.")
 if not YANDEX_API_KEY:
@@ -71,12 +54,91 @@ main_keyboard = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
+# ================== HEALTH CHECK СЕРВЕР (НЕ ТРОГАЕТ НЕЙРОСЕТЬ) ==================
+async def handle_health(request):
+    """
+    Простой HTTP-эндпоинт, который НЕ вызывает YandexGPT.
+    Render стучится сюда, а нейросетка отдыхает.
+    """
+    return web.Response(
+        text="🟢 Bot is alive, YandexGPT is sleeping",
+        status=200
+    )
+
+async def handle_stats(request):
+    """
+    Доп. эндпоинт для проверки статуса (тоже без нейросети)
+    """
+    return web.json_response({
+        "status": "running",
+        "bot_name": "Legal Assistant",
+        "uptime": "forever hopefully",
+        "tokens_safe": True
+    })
+
+async def start_health_server():
+    """Запускаем HTTP сервер для пингов от Render"""
+    app = web.Application()
+    
+    # Только простые роуты, которые НЕ используют YandexGPT
+    app.router.add_get('/', handle_health)
+    app.router.add_get('/health', handle_health)
+    app.router.add_get('/stats', handle_stats)
+    app.router.add_get('/ping', handle_health)
+    
+    # Render дает порт через переменную окружения
+    port = int(os.environ.get('PORT', 10000))
+    
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    
+    logger.info(f"✅ Health server running on port {port} (без доступа к YandexGPT)")
+
+# ================== ФУНКЦИИ ПИНГА (БЕЗОПАСНЫЕ) ==================
+async def self_ping():
+    """
+    Пингуем сами себя, чтобы Render не усыпил.
+    НЕ ИСПОЛЬЗУЕТ YandexGPT - только HTTP-запрос к /health
+    """
+    # Ждем 5 минут перед первым пингом
+    await asyncio.sleep(300)
+    
+    while True:
+        try:
+            # Получаем URL сервиса из переменной окружения Render
+            render_url = os.environ.get('RENDER_EXTERNAL_URL')
+            
+            if render_url:
+                # Стучимся ТОЛЬКО к health-эндпоинту (не к нейросети!)
+                health_url = f"{render_url}/health"
+                
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(health_url, timeout=10) as response:
+                        if response.status == 200:
+                            logger.info("🏓 Самопинг успешен (токены не тронуты)")
+                        else:
+                            logger.warning(f"⚠️ Самопинг вернул {response.status}")
+            else:
+                logger.warning("⚠️ RENDER_EXTERNAL_URL не найден, пропускаем пинг")
+                
+        except Exception as e:
+            logger.error(f"❌ Ошибка самопинга: {e}")
+        
+        # Спим 10 минут перед следующим пингом
+        await asyncio.sleep(600)
+
 # ================== ФУНКЦИИ YANDEXGPT ==================
 
 async def call_yandex_gpt(prompt, system_prompt=None, temperature=0.3, max_tokens=1000):
     """
     Отправляет запрос к YandexGPT и возвращает ответ
     """
+    # Защита от дурака
+    if not prompt or len(prompt.strip()) < 2:
+        return "⚠️ Слишком короткий запрос"
+    
     headers = {
         "Authorization": f"Api-Key {YANDEX_API_KEY}",
         "Content-Type": "application/json"
@@ -174,7 +236,8 @@ async def about_bot(message: types.Message):
     await message.answer(
         "🤖 *О боте*\n\n"
         "Технологии: YandexGPT + Aiogram\n"
-        "Работает 24/7 на Render.com",
+        "Работает 24/7 на Render.com\n"
+        "Токены тратятся только на ваши запросы!",
         parse_mode="Markdown",
         reply_markup=main_keyboard
     )
@@ -203,7 +266,7 @@ async def handle_term_command(message: types.Message):
 @dp.message()
 async def handle_message(message: types.Message):
     # Игнорируем команды и кнопки
-    if message.text.startswith('/') or message.text in main_keyboard_buttons:
+    if message.text.startswith('/') or message.text in ["📝 Перевести текст", "📚 Объяснить термин", "ℹ️ О боте", "❓ Помощь"]:
         return
     
     if len(message.text) > 5000:
@@ -215,7 +278,7 @@ async def handle_message(message: types.Message):
     try:
         # Определяем тип запроса
         if len(message.text.split()) < 10 and not any(
-            word in message.text.lower() for word in ['статья', 'закон', 'кодекс']
+            word in message.text.lower() for word in ['статья', 'закон', 'кодекс', 'договор', 'пункт']
         ):
             response = await explain_term(message.text)
         else:
@@ -229,8 +292,16 @@ async def handle_message(message: types.Message):
 # ================== ЗАПУСК ==================
 
 async def main():
+    """Запуск бота и вспомогательных сервисов"""
+    
+    # Запускаем HTTP сервер для Render (НЕ ТРОГАЕТ YandexGPT)
     asyncio.create_task(start_health_server())
-    logger.info("Бот запускается...")
+    
+    # Запускаем самопинг (тоже НЕ ТРОГАЕТ YandexGPT)
+    asyncio.create_task(self_ping())
+    
+    # Запускаем бота (только он трогает нейросеть)
+    logger.info("🤖 Бот запускается...")
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
