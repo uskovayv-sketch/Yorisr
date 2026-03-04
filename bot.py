@@ -13,38 +13,25 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 import nest_asyncio
-# Добавь ЭТО в самый верх bot.py (после импортов)
-import asyncio
-import logging
 from aiohttp import web
 
-# Простой HTTP сервер для Health Check Render
-async def handle_health(request):
-    return web.Response(text="OK")
+# Простой HTTP сервер для Health Check
+async def health_check(request):
+    return web.Response(text="I'm alive!")
 
-async def run_health_server():
+async def start_health_server():
     app = web.Application()
-    app.router.add_get('/', handle_health)
-    app.router.add_get('/health', handle_health)
+    app.router.add_get('/', health_check)
+    app.router.add_get('/health', health_check)
     
-    # Render передает порт в переменной PORT (обычно 10000)
-    port = int(os.environ.get('PORT', 10000))
+    # Render дает порт через переменную окружения
+    port = int(os.environ.get('PORT', 8080))
     
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
-    logging.info(f"Health check server started on port {port}")
-    
-
-# В функции main() добавь запуск health сервера:
-async def main():
-    # Запускаем health check сервер (чтобы Render не ругался)
-    asyncio.create_task(run_health_server())
-    
-    logging.info("Бот запускается...")
-    await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot)
+    print(f"✅ Health server running on port {port}")
 # Разрешаем asyncio в Colab (если будешь тестировать)
 nest_asyncio.apply()
 
@@ -242,6 +229,7 @@ async def handle_message(message: types.Message):
 # ================== ЗАПУСК ==================
 
 async def main():
+    asyncio.create_task(start_health_server())
     logger.info("Бот запускается...")
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
